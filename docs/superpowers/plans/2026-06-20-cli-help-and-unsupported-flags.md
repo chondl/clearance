@@ -4,7 +4,7 @@
 
 **Goal:** Make the `clearance` CLI print usage for `--help` and warn on unsupported `--flags` instead of creating files named after them, while still opening valid files.
 
-**Architecture:** Add a pure `parseArguments` function and a `helpText` string to the shared, unit-tested `ClearanceCommandLineTool` enum. Rewrite the untested `main.swift` glue to consume the parse result: help short-circuits to stdout, unsupported flags warn to stderr, flag-only invocations don't launch, and valid file paths flow into the existing `prepareDocumentURLs` + `open -a` path unchanged.
+**Architecture:** Add a pure `parseArguments` function and a `helpText` string to the shared, unit-tested `ClearanceCommandLineTool` enum. Have `main.swift` consume the parse result: unsupported flags report errors to stderr and set exit status 1, help short-circuits to stdout, flag-only invocations do not launch, and valid file paths flow into the existing `prepareDocumentURLs` + `open -a` path. Exercise the bundled helper as a subprocess to verify exit status and filesystem effects.
 
 **Tech Stack:** Swift 6, Xcode 26 (`xcodebuild`), XCTest. Build/test from `apps/macos`.
 
@@ -247,20 +247,21 @@ private func run() throws {
         Array(CommandLine.arguments.dropFirst())
     )
 
-    if parsed.helpRequested {
-        print(ClearanceCommandLineTool.helpText)
-        exit(0)
-    }
-
     for flag in parsed.unsupportedFlags {
         FileHandle.standardError.write(
             Data("\(ClearanceCommandLineTool.name): unsupported flag: \(flag)\n".utf8)
         )
     }
 
-    // Flag-only invocation (no files): warn but do not launch the app.
+    let exitStatus: Int32 = parsed.unsupportedFlags.isEmpty ? 0 : 1
+    if parsed.helpRequested {
+        print(ClearanceCommandLineTool.helpText)
+        exit(exitStatus)
+    }
+
+    // Flag-only invocation (unsupported flag, no files): warn but do not launch.
     if parsed.filePaths.isEmpty && !parsed.unsupportedFlags.isEmpty {
-        exit(0)
+        exit(exitStatus)
     }
 
     guard let helperExecutableURL = Bundle.main.executableURL,
@@ -281,6 +282,7 @@ private func run() throws {
     guard process.terminationStatus == 0 else {
         throw CommandError.openFailed(process.terminationStatus)
     }
+    exit(exitStatus)
 }
 
 private enum CommandError: LocalizedError {
@@ -327,13 +329,13 @@ Expected: `helper OK: …/Clearance.app/Contents/Helpers/clearance`.
 "$HELPER" --help; echo "exit=$?"
 # Expected: usage text printed, exit=0.
 
-# 2. Unsupported flag warns on stderr; flag-only => no launch, exit 0.
+# 2. Unsupported flag warns on stderr; flag-only => no launch, exit 1.
 "$HELPER" --bogus; echo "exit=$?"
-# Expected: "clearance: unsupported flag: --bogus" on stderr, app does NOT launch, exit=0.
+# Expected: "clearance: unsupported flag: --bogus" on stderr, app does NOT launch, exit=1.
 
-# 3. Unsupported flag + valid file: warns, still opens the file, exit 0.
+# 3. Unsupported flag + valid file: warns, still opens the file, exit 1.
 TMP="$(mktemp -d)/note.md"; "$HELPER" --bogus "$TMP"; echo "exit=$?"
-# Expected: warning on stderr, Clearance opens with the new note.md, exit=0. File created at $TMP.
+# Expected: warning on stderr, Clearance opens with the new note.md, exit=1. File created at $TMP.
 
 # 4. `--` separator opens a dash-named file literally (no warning).
 DASHDIR="$(mktemp -d)"; ( cd "$DASHDIR" && "$HELPER" -- --weird-name.md ); echo "exit=$?"

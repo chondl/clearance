@@ -67,22 +67,20 @@ app bundle is located.** Locating the app can fail (`appBundleNotFound`); `--hel
 must still print and exit 0 on a broken/uninstalled app, so bundle resolution
 must not run for the help or flag-only paths.
 
-1. **Help wins and short-circuits.** If "help requested" is set, print the help
-   text to **stdout** and `exit(0)`. No files are opened or created, even if
-   valid file arguments are present (`clearance --help notes.md` just prints
-   help).
-2. **Warn about unsupported flags.** For each collected unsupported flag, write
-   `clearance: unsupported flag: <flag>` to **stderr**.
-3. **Suppress flag-only launch.** If `filePaths` is empty **and** at least one
-   unsupported flag was present (e.g. `clearance --bogus`), do **not** launch the
-   app — only the warning(s) from step 2 are emitted. `exit(0)`.
-4. **Open / launch.** Otherwise call the existing `prepareDocumentURLs` with
-   `filePaths` and `open -a` the app. When `filePaths` is non-empty those files
-   open; when it is empty (bare `clearance`, or `clearance --`) the app launches
-   with no document — preserving today's behavior.
-5. **Exit 0** in all non-help, non-error cases — including when unsupported
-   flags were warned about but valid files opened successfully. A genuine
-   failure to launch (`open` non-zero) still exits 1 as today.
+1. **Report unsupported flags.** For each collected unsupported flag, write
+   `clearance: unsupported flag: <flag>` to **stderr**. The exit status is 1
+   if any unsupported flags are present, otherwise 0.
+2. **Help short-circuits opening.** If help was requested, print help to
+   **stdout** and exit with that status. No files are opened or created.
+   `clearance --help` succeeds; `clearance --bogus --help` reports the error,
+   prints help, and exits 1.
+3. **Suppress flag-only launch.** If `filePaths` is empty and unsupported
+   flags are present, exit 1 without launching the app.
+4. **Open / launch.** Otherwise prepare and open the valid file paths. Bare
+   `clearance` and `clearance --` still launch without a document.
+5. **Return the status.** Successfully opening valid files does not erase
+   an unsupported-flag error: mixed invocations exit 1. File preparation and
+   launch failures also exit 1.
 
 The launch-suppression condition is precisely `filePaths.isEmpty &&
 !unsupportedFlags.isEmpty`. This preserves the bare-`clearance` launch (no
@@ -93,10 +91,9 @@ warns and does **not** launch — an erroneous flag with nothing to open is
 treated as an error case regardless of a trailing `--`. (Plain `clearance --`,
 with no flags, still launches bare.)
 
-**Exit codes are exit 0 for every non-launch-failure case**, including the
-flag-only warn-and-don't-launch path. This is a deliberate, user-chosen
-behavior (lenient: a warning is emitted but the process still reports success);
-the only non-zero exit is the pre-existing `open` failure (exit 1).
+**Exit status is 1 whenever an unsupported flag is present**, including
+flag-only, mixed-file, and help invocations. Successful invocations without
+unsupported flags exit 0.
 
 ### Help text
 
@@ -148,21 +145,11 @@ fully determines control flow from the argument list alone.
 
 ### `main.swift` changes
 
-`main.swift` (in `ClearanceCLI`, untested glue) becomes:
-
-1. `let parsed = ClearanceCommandLineTool.parseArguments(Array(CommandLine.arguments.dropFirst()))`
-2. If `parsed.helpRequested`: print `helpText` to stdout, `exit(0)`.
-3. For each flag in `parsed.unsupportedFlags`: write
-   `\(name): unsupported flag: \(flag)\n` to stderr.
-4. If `parsed.filePaths.isEmpty && !parsed.unsupportedFlags.isEmpty`: `exit(0)`
-   (flag-only invocation, no launch).
-5. Otherwise resolve the helper/app URLs, call
-   `prepareDocumentURLs(forArguments: parsed.filePaths)`, and `open -a` as today
-   (with an empty `filePaths` this launches the app with no document, as before).
-
-The existing app-bundle-resolution and `open` logic is unchanged; only the input
-to `prepareDocumentURLs` is now the filtered `filePaths`, and two early exits are
-added (help, empty-after-flags).
+`main.swift` parses arguments, reports unsupported flags, and computes an
+exit status of 1 for those errors. Help and flag-only invocations exit before
+app lookup. Other invocations retain the existing app lookup, file preparation,
+and launch flow, then return the computed status. Launch failures still exit 1.
+The bundled helper is exercised as a subprocess in the test suite.
 
 ## Testing
 

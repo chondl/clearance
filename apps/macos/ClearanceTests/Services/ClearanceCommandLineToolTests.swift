@@ -201,6 +201,31 @@ final class ClearanceCommandLineToolTests: XCTestCase {
         XCTAssertTrue(ClearanceCommandLineTool.helpText.contains("--help"))
     }
 
+    func testHelperReportsUnsupportedFlagsAsFailureWithoutCreatingFiles() throws {
+        let helperURL = try XCTUnwrap(ClearanceCommandLineTool.helperExecutableURL())
+        for arguments in [["--bogus"], ["--bogus", "--help", "notes.md"], ["--help"]] {
+            let directory = try makeDirectory()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let process = Process()
+            let output = Pipe()
+            let errors = Pipe()
+            process.executableURL = helperURL
+            process.arguments = arguments
+            process.currentDirectoryURL = directory
+            process.standardOutput = output
+            process.standardError = errors
+
+            try process.run()
+            process.waitUntilExit()
+
+            let diagnostic = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let expectsError = arguments.contains("--bogus")
+            XCTAssertEqual(process.terminationStatus, expectsError ? 1 : 0, "\(arguments)")
+            XCTAssertEqual(diagnostic.contains("--bogus"), expectsError)
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
+        }
+    }
+
     private func makeBundle(helperName: String) throws -> URL {
         let rootURL = try makeDirectory().appendingPathExtension("app")
         let contentsURL = rootURL.appending(path: "Contents", directoryHint: .isDirectory)
